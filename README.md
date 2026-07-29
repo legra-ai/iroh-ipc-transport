@@ -5,6 +5,12 @@ processes on the same host connect over a **Unix domain socket** (or, on
 Windows, a **message-mode named pipe**) as a **native iroh path** — instead of
 iroh's UDP/relay transports.
 
+Sibling of
+[`iroh-mem-transport`](https://github.com/dataroadinc/iroh-mem-transport):
+that crate is same-**process** peers over in-memory datagram queues (no
+sockets, files, or network at all — test harnesses, single-binary
+deployments); this crate is same-**machine** peers across process boundaries.
+
 ## Why
 
 The usual way to give co-located peers a fast local path is a hand-rolled side
@@ -65,10 +71,10 @@ releases.
 
 Milestones:
 
-- [ ] Unix `SOCK_DGRAM` transport + two-endpoint echo test (native `is_relay=false` path)
-- [ ] `PreferIpcTransport` path selector
+- [x] Unix `SOCK_DGRAM` transport + two-endpoint echo test (native `is_relay=false` path)
+- [x] `PreferIpcTransport` path selector (tiered: IPC → direct IP → relay, with anti-flap hysteresis)
 - [ ] Windows message-mode named-pipe backend
-- [ ] Publish to crates.io
+- [x] Publish to crates.io
 
 ## License
 
