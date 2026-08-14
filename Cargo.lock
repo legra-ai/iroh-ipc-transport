@@ -1399,7 +1399,7 @@ dependencies = [
 
 [[package]]
 name = "iroh-ipc-transport"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "iroh",
  "iroh-base",
