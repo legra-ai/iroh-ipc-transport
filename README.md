@@ -1,5 +1,11 @@
 # iroh-ipc-transport
 
+[![Crates.io](https://img.shields.io/crates/v/iroh-ipc-transport.svg)](https://crates.io/crates/iroh-ipc-transport)
+[![Documentation](https://docs.rs/iroh-ipc-transport/badge.svg)](https://docs.rs/iroh-ipc-transport)
+[![CI](https://github.com/legra-ai/iroh-ipc-transport/actions/workflows/ci.yml/badge.svg)](https://github.com/legra-ai/iroh-ipc-transport/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
+[![Downloads](https://img.shields.io/crates/d/iroh-ipc-transport.svg)](https://crates.io/crates/iroh-ipc-transport)
+
 A **local-socket custom transport** for [iroh](https://iroh.computer): two
 processes on the same host connect over a **Unix domain socket** (or, on
 Windows, a **message-mode named pipe**) as a **native iroh path** — instead of
@@ -71,6 +77,8 @@ Milestones:
 - [ ] Publish to crates.io
 
 ## License
+
+Copyright © 2026 DataRoad Inc, Delaware, USA, trading as Legra.
 
 Licensed under either of
 

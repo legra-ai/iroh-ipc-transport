@@ -1,12 +1,12 @@
 [package]
 name = "iroh-ipc-transport"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 description = "Inter-process custom transport for iroh — co-located peers connect over a local IPC socket (Unix domain socket, or a message-mode named pipe on Windows) as a native iroh path, so QUIC multiplexes and authenticates over it with no relay"
-repository = "https://github.com/dataroadinc/iroh-ipc-transport"
-homepage = "https://github.com/dataroadinc/iroh-ipc-transport"
+repository = "https://github.com/legra-ai/iroh-ipc-transport"
+homepage = "https://github.com/legra-ai/iroh-ipc-transport"
 keywords = ["iroh", "p2p", "transport", "ipc", "unix-socket"]
 categories = ["network-programming"]
 readme = "README.md"
