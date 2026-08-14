@@ -1405,6 +1405,7 @@ dependencies = [
  "iroh-base",
  "n0-watcher",
  "noq-udp",
+ "rhusky",
  "socket2",
  "tempfile",
  "tokio",
@@ -2438,6 +2439,12 @@ name = "resolv-conf"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e061d1b48cb8d38042de4ae0a7a6401009d6143dc80d2e2d6f31f0bdd6470c7"
+
+[[package]]
+name = "rhusky"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd58f5095f1eaaee85441008005db48773976f5bb85bedd35d6cf3f04db8ec4b"
 
 [[package]]
 name = "ring"
