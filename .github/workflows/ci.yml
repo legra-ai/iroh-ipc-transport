@@ -16,7 +16,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt
@@ -28,7 +28,7 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
@@ -45,7 +45,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Run tests
         run: cargo test
@@ -55,18 +55,18 @@ jobs:
   # Publish the current Cargo.toml version to crates.io on push to main.
   # Idempotent: an already-published version is treated as success, so this
   # only ever uploads a version bump (see also auto-version-bump.yml). Uses the
-  # dataroadinc org-level CRATES_IO secret.
+  # legra-ai org-level CRATES_IO secret.
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest
     needs: [fmt, clippy, test]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: cargo publish (treat "already published" as success)
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
         run: |
           rc=0
           LOG=$(cargo publish 2>&1) || rc=$?
