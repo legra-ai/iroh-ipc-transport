@@ -2,7 +2,7 @@
 name = "iroh-ipc-transport"
 version = "0.1.5"
 edition = "2024"
-authors = ["DataRoad Inc, Delaware, USA, trading as Legra"]
+authors = ["Jacobus Geluk <jacobus.geluk@dataroad.com>"]
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 description = "Inter-process custom transport for iroh — co-located peers connect over a local IPC socket (Unix domain socket, or a message-mode named pipe on Windows) as a native iroh path, so QUIC multiplexes and authenticates over it with no relay"
