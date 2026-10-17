@@ -53,6 +53,19 @@ transport resolves the peer's `EndpointId` to its local socket path / pipe name
 by convention. A `PathSelector` (`PreferIpcTransport`) tells iroh to prefer
 this path whenever a same-host candidate exists.
 
+### Socket pathname ownership
+
+Binding never removes an existing filesystem entry. A second endpoint using
+the same path fails with `AddrInUse` and leaves the original endpoint reachable.
+The same rule protects regular files and stale socket entries: the transport
+cannot establish ownership of an existing pathname merely by probing it.
+
+The application owns shutdown and pathname cleanup. Stop the previous endpoint
+before removing its socket entry, and ensure no other process can bind that
+path during cleanup. After an unclean exit, perform that cleanup explicitly
+before restarting. Silently unlinking at bind time would allow a second process
+to replace the address of a live endpoint.
+
 ## Crate layout (roadmap)
 
 - `socket` — the platform seam: `#[cfg(unix)]` `UnixDatagram`,
