@@ -30,6 +30,11 @@ pub struct IpcTransport {
 impl IpcTransport {
     /// Create a transport that binds its datagram socket at `socket_path` when
     /// the iroh endpoint binds.
+    ///
+    /// An existing filesystem entry is never removed or replaced. Binding to
+    /// an occupied path fails with [`io::ErrorKind::AddrInUse`], including when
+    /// the entry is a socket left by an exited process. The owner must clean
+    /// up that path explicitly after ensuring the previous endpoint is gone.
     pub fn new(socket_path: impl Into<PathBuf>) -> Self {
         Self {
             socket_path: socket_path.into(),
@@ -71,8 +76,10 @@ const IPC_SOCKET_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
 impl CustomTransport for IpcTransport {
     fn bind(&self) -> io::Result<Box<dyn CustomEndpoint>> {
-        // A stale socket file from a previous run would make `bind` fail.
-        let _ = std::fs::remove_file(&self.socket_path);
+        // The kernel grants pathname ownership through bind. Removing an
+        // existing entry here steals a live endpoint's address and redirects
+        // its peers to a different socket. A collision must fail untouched;
+        // probing first would introduce a check/unlink/rebind race.
         let socket = UnixDatagram::bind(&self.socket_path)?;
         if let Some(mode) = self.mode {
             use std::os::unix::fs::PermissionsExt;
