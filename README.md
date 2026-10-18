@@ -97,6 +97,11 @@ and the distributable crate archive gate publication through the shared
 `legra-ai/github-actions` maintenance workflow. Compiler and formatter versions
 are pinned separately. Run `sh scripts/fmt.sh` to format.
 
+Dependabot merges remain manual: the organization's dedicated dependency-merger
+App currently grants access only to its two pilot repositories. Release
+publication uses the separate release-writer identity. This repository does not
+reuse that writer to bypass merge checks or broaden the merger's credential scope.
+
 Transfer tests are correctness and progress checks. They are not Host/Custodian
 durability benchmarks and do not establish a performance ranking between OSes.
 
