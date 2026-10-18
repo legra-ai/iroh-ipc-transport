@@ -1,6 +1,8 @@
 //! Filesystem rendezvous, with leases instead of socket liveness probes.
 
 use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -150,7 +152,6 @@ impl Lease {
         tokio::fs::write(&path, addr.data()).await?;
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
             tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666)).await?;
         }
         Ok(())

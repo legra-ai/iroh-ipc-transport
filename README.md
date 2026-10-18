@@ -3,112 +3,102 @@
 [![Crates.io](https://img.shields.io/crates/v/iroh-ipc-transport.svg)](https://crates.io/crates/iroh-ipc-transport)
 [![Documentation](https://docs.rs/iroh-ipc-transport/badge.svg)](https://docs.rs/iroh-ipc-transport)
 [![CI](https://github.com/legra-ai/iroh-ipc-transport/actions/workflows/ci.yml/badge.svg)](https://github.com/legra-ai/iroh-ipc-transport/actions/workflows/ci.yml)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
-[![Downloads](https://img.shields.io/crates/d/iroh-ipc-transport.svg)](https://crates.io/crates/iroh-ipc-transport)
 
-A **local-socket custom transport** for [iroh](https://iroh.computer): two
-processes on the same host connect over a **Unix domain socket** (or, on
-Windows, a **message-mode named pipe**) as a **native iroh path** — instead of
-iroh's UDP/relay transports.
+Local communication between processes through one native [iroh](https://iroh.computer)
+QUIC connection. The crate owns platform selection, local discovery, exclusive
+endpoint ownership and cleanup. QUIC supplies authenticated identity, reliable
+streams, multiplexing and congestion control.
 
-## Why
+| Platform | Backend |
+| --- | --- |
+| macOS | IPv4 loopback UDP, using Noq's batched I/O |
+| Linux | Bound Unix datagrams |
+| Windows | Local message-mode named pipes, rejecting remote clients |
 
-The usual way to give co-located peers a fast local path is a hand-rolled side
-channel: a `.data.sock`, its own framing, its own multiplexer, its own accept
-loop, its own identity handshake, its own relay fallback. That connection lives
-*outside* the iroh network — a whole parallel transport masquerading as an
-optimization.
+macOS deliberately never creates AF_UNIX datagrams, including during discovery
+and cleanup. This avoids that kernel subsystem's disconnect path. UDP remains
+an explicit custom transport, so `PreferIpcTransport` can prefer it over ordinary
+IP and relay paths. The backend does not change after an error.
 
-This crate instead plugs the local socket into iroh's **custom-transport API**,
-so it becomes just another path on the one iroh `Connection`:
+## Usage
 
-- **QUIC multiplexes** streams over it — many `open_bi()` substreams on one
-  socket, no per-stream dial, real per-stream flow control (no head-of-line
-  blocking).
-- **iroh TLS authenticates** the peer — no bespoke "claimed, not authenticated"
-  identity preamble.
-- **iroh path selection** prefers it for same-host peers (lowest RTT) and
-  **falls back to UDP/relay automatically** when the socket is absent — no
-  bespoke fallback logic.
-- Everything collapses back to `conn.open_bi()` over the one connection.
+```rust,no_run
+use std::sync::Arc;
+use iroh::{Endpoint, EndpointAddr, SecretKey, endpoint::presets};
+use iroh_ipc_transport::{IpcTransport, LocalDiscovery, PreferIpcTransport};
 
-## How it works
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let discovery = LocalDiscovery::new(std::env::temp_dir().join("my-app-ipc"));
+let key = SecretKey::generate();
+let transport = IpcTransport::prepare(discovery.clone(), key.public()).await?;
+let endpoint = Endpoint::builder(presets::Minimal)
+    .secret_key(key)
+    .add_custom_transport(Arc::new(transport.clone()))
+    .path_selector(Arc::new(PreferIpcTransport))
+    .address_lookup(discovery.clone())
+    .bind()
+    .await?;
 
-iroh's `CustomTransport` is a **datagram** interface (`poll_send` / `poll_recv`
-of packets), because QUIC runs over an unreliable datagram substrate. So each
-platform uses a **message-boundary-preserving** local socket:
+// For targets already carrying IP/relay addresses, add the local candidate
+// explicitly: iroh need not consult address lookup for an addressed target.
+# let peer_id = SecretKey::generate().public();
+let mut target = EndpointAddr::new(peer_id);
+if let Some(local) = discovery.resolve(peer_id).await? {
+    target = target.with_addrs([local]);
+}
 
-| Platform | Socket | Why |
-|---|---|---|
-| Unix | `SOCK_DGRAM` `UnixDatagram` | natively datagram |
-| Windows | `PIPE_TYPE_MESSAGE` named pipe | each read/write is one discrete message — datagram-like |
+endpoint.close().await;
+transport.close().await?;
+# Ok(())
+# }
+```
 
-A **byte-stream** pipe/socket would *not* fit (you'd have to frame QUIC packets
-yourself); the message primitives above map directly onto `poll_recv`/
-`poll_send`. Both live behind a private `ipc` seam so the iroh glue on top is
-platform-agnostic.
+Applications choose a shared local rendezvous directory and endpoint identity;
+they do not construct socket paths, UDP ports or pipe names. Use a directory
+writable by the intended cooperating accounts. Unix socket and record modes
+are `0666`; QUIC/TLS, rather than filesystem reachability, authenticates peers.
+On Windows the directory and named-pipe ACLs must allow those accounts access.
+The default pipe security descriptor permits the owning account and system;
+this crate does not broaden Windows ACLs.
 
-Addressing: a peer's `CustomAddr` is `(IPC_TRANSPORT_ID, key_bytes)`; the
-transport resolves the peer's `EndpointId` to its local socket path / pipe name
-by convention. A `PathSelector` (`PreferIpcTransport`) tells iroh to prefer
-this path whenever a same-host candidate exists.
+`prepare` binds and publishes asynchronously. A second live endpoint with the
+same identity fails with `AddrInUse`. Its factory can bind only once. Leases
+are OS file locks; lookup never connects a socket or checks a PID to determine
+liveness. A process crash releases its lease, making its record undiscoverable.
+A later owner of the same identity can reclaim it. One persistent directory
+lock prevents unlink/rebind races between processes.
 
-### Socket pathname ownership
+After closing iroh, `transport.close().await` closes the OS resources before
+removing discovery records. Closing again cannot remove a replacement owner's
+record. Dropping the final transport/sender/receiver handle schedules cleanup;
+when the runtime is already gone, an unlocked record may remain and is ignored.
 
-Binding never removes an existing filesystem entry. A second endpoint using
-the same path fails with `AddrInUse` and leaves the original endpoint reachable.
-The same rule protects regular files and stale socket entries: the transport
-cannot establish ownership of an existing pathname merely by probing it.
+Windows uses a fixed-size routing token and a bounded length field inside each
+native pipe message. Tokio/Mio can deliver a message in partial reads, so the
+receiver reassembles it before passing one datagram to QUIC. This is transport
+framing, independent of the application protocol. Each endpoint permits at most
+128 active inbound and 128 cached outbound pipes, with a 32-packet receive queue
+and a 65,535-byte datagram limit. Idle outbound handles expire after 60 seconds
+when admitting another peer; exhausting the active limit returns an error.
 
-The application owns shutdown and pathname cleanup. Stop the previous endpoint
-before removing its socket entry, and ensure no other process can bind that
-path during cleanup. After an unclean exit, perform that cleanup explicitly
-before restarting. Silently unlinking at bind time would allow a second process
-to replace the address of a live endpoint.
+## Validation and maintenance
 
-## Crate layout (roadmap)
+Requires iroh 1.3 and its experimental `unstable-custom-transports` feature.
+The custom address format and preparation API replace the earlier pathname API.
 
-- `socket` — the platform seam: `#[cfg(unix)]` `UnixDatagram`,
-  `#[cfg(windows)]` message-mode named pipe, behind one datagram trait.
-- `addr` — `CustomAddr` ⇆ socket address mapping + `IPC_TRANSPORT_ID`.
-- `endpoint` — `CustomEndpoint` (`watch_local_addrs`, `poll_recv`) +
-  `CustomSender` (`poll_send`, `is_valid_send_addr`).
-- `transport` — `IpcTransport` implementing `CustomTransport`.
-- `selector` — `PreferIpcTransport: PathSelector`.
+`cargo test --locked` covers local-only QUIC echo, burst transfer, coexistence
+with IP paths, lease collisions, process-death recovery, malformed addresses and
+partial pipe reads. Native Linux, macOS and Windows tests, Clippy, documentation
+and the distributable crate archive gate publication through the shared
+`legra-ai/github-actions` maintenance workflow. Compiler and formatter versions
+are pinned separately. Run `sh scripts/fmt.sh` to format.
 
-## Status
-
-**Work in progress / experimental.** Depends on iroh's
-`unstable-custom-transports` feature — experimental and may change between iroh
-releases.
-
-Milestones:
-
-- [ ] Unix `SOCK_DGRAM` transport + two-endpoint echo test (native `is_relay=false` path)
-- [ ] `PreferIpcTransport` path selector
-- [ ] Windows message-mode named-pipe backend
-- [ ] Publish to crates.io
+Transfer tests are correctness and progress checks. They are not Host/Custodian
+durability benchmarks and do not establish a performance ranking between OSes.
 
 ## License
 
 Copyright © 2026 DataRoad Inc, Delaware, USA, trading as Legra.
 
-Licensed under either of
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
-
-at your option.
-
-### Contribution
-
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
-dual licensed as above, without any additional terms or conditions.
-
-## Prior art
-
-Modeled on iroh's own custom transports:
-[iroh-tor-transport](https://github.com/n0-computer/iroh-tor-transport),
-[iroh-ble-transport](https://github.com/mcginty/iroh-ble-transport), and iroh's
-in-tree `test_utils::test_transport` + `examples/custom-transport.rs`.
+Licensed under either [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your
+option. Contributions are licensed under the same terms.

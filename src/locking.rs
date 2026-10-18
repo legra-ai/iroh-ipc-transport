@@ -4,6 +4,8 @@
 //! involved: process death releases the OS lock even after an unclean shutdown.
 
 use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use tokio::fs::{File, OpenOptions};
@@ -26,7 +28,6 @@ impl Lock {
                 Ok(file) => {
                     #[cfg(unix)]
                     {
-                        use std::os::unix::fs::PermissionsExt;
                         file.set_permissions(std::fs::Permissions::from_mode(0o666))
                             .await?;
                     }

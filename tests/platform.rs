@@ -1,17 +1,19 @@
 //! macOS must not create AF_UNIX sockets, including for discovery or cleanup.
 
+#![cfg(target_os = "macos")]
+
 mod common;
+
+use std::future::poll_fn;
+use std::io::IoSliceMut;
+use std::net::Ipv4Addr;
+use std::time::Duration;
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn macos_does_not_advertise_a_unix_socket_path() {
     use iroh::endpoint::transports::{CustomTransport, RecvInfo};
     use iroh_ipc_transport::{IpcTransport, LocalDiscovery};
-    use std::future::poll_fn;
-    use std::io::IoSliceMut;
-    use std::net::Ipv4Addr;
-    use std::time::Duration;
-
     let dir = common::TestDir::new().await;
     let transport = IpcTransport::prepare(
         LocalDiscovery::new(dir.path()),
