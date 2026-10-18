@@ -7,14 +7,14 @@
 //! turned that into multi-second stalls. With the batched drain + enlarged
 //! buffers, 8 MiB rides the Unix socket well under a generous deadline.
 
-#![cfg(unix)]
+mod common;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use iroh::endpoint::{Endpoint, presets};
 use iroh::{EndpointAddr, SecretKey, TransportAddr};
-use iroh_ipc_transport::{IpcTransport, PreferIpcTransport};
+use iroh_ipc_transport::{IpcTransport, LocalDiscovery, PreferIpcTransport};
 
 const BURST_ALPN: &[u8] = b"iroh-ipc-transport/burst";
 const PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
@@ -29,7 +29,12 @@ async fn ipc_only_endpoint(
     socket_path: &std::path::Path,
     alpns: Vec<Vec<u8>>,
 ) -> (Endpoint, IpcTransport) {
-    let transport = IpcTransport::new(socket_path);
+    let transport = IpcTransport::prepare(
+        LocalDiscovery::new(socket_path.parent().expect("namespace")),
+        secret.public(),
+    )
+    .await
+    .expect("prepare IPC");
     let endpoint = Endpoint::builder(presets::N0)
         .secret_key(secret)
         .alpns(alpns)
@@ -45,7 +50,7 @@ async fn ipc_only_endpoint(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn large_transfer_over_ipc_completes_promptly() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = common::TestDir::new().await;
     let path_a = dir.path().join("a.ipc.sock");
     let path_b = dir.path().join("b.ipc.sock");
 
@@ -55,6 +60,7 @@ async fn large_transfer_over_ipc_completes_promptly() {
     let (ep_a, _ta) = ipc_only_endpoint(SecretKey::from([1u8; 32]), &path_a, vec![]).await;
     let (ep_b, tb) = ipc_only_endpoint(secret_b, &path_b, vec![BURST_ALPN.to_vec()]).await;
 
+    let server_endpoint = ep_b.clone();
     // Server: drain the whole stream, reply with the byte count it received.
     let server = tokio::spawn(async move {
         let incoming = ep_b.accept().await.expect("incoming");
@@ -69,6 +75,7 @@ async fn large_transfer_over_ipc_completes_promptly() {
             .expect("ack write");
         send.finish().expect("finish");
         conn.closed().await;
+        server_endpoint.close().await;
         received.len()
     });
 
@@ -96,4 +103,8 @@ async fn large_transfer_over_ipc_completes_promptly() {
     conn.close(0u32.into(), b"done");
     let received = server.await.expect("server task");
     assert_eq!(received, PAYLOAD_BYTES, "server drained the whole payload");
+    ep_a.close().await;
+    _ta.close().await.expect("close client transport");
+    tb.close().await.expect("close server transport");
+    dir.close().await;
 }

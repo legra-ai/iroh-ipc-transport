@@ -8,7 +8,7 @@
 //! where the seconds live, the fix is making the IPC address available *at*
 //! dial time, not tuning the datagram path.
 
-#![cfg(unix)]
+mod common;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use iroh::endpoint::{Endpoint, presets};
 use iroh::{EndpointAddr, SecretKey, TransportAddr};
-use iroh_ipc_transport::{IpcTransport, PreferIpcTransport};
+use iroh_ipc_transport::{IpcTransport, LocalDiscovery, PreferIpcTransport};
 
 const ALPN: &[u8] = b"iroh-ipc-transport/udp-window";
 const PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
@@ -26,7 +26,12 @@ async fn coexist_endpoint(
     socket_path: &std::path::Path,
     alpns: Vec<Vec<u8>>,
 ) -> Endpoint {
-    let transport = IpcTransport::new(socket_path);
+    let transport = IpcTransport::prepare(
+        LocalDiscovery::new(socket_path.parent().expect("namespace")),
+        secret.public(),
+    )
+    .await
+    .expect("prepare IPC");
     Endpoint::builder(presets::N0)
         .secret_key(secret)
         .alpns(alpns)
@@ -58,7 +63,7 @@ fn lan_ipv4() -> Option<Ipv4Addr> {
 }
 
 async fn run_case(label: &str, dial_ip: Ipv4Addr) {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = common::TestDir::new().await;
     let secret_b = SecretKey::from([2u8; 32]);
     let b_id = secret_b.public();
 
