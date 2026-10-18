@@ -1,61 +1,32 @@
-//! # iroh-ipc-transport
+//! Portable local datagrams as a native iroh QUIC path.
 //!
-//! An **inter-process (local-socket) custom transport** for [iroh]:
-//! co-located peers (two processes on the same host) connect over a local
-//! IPC socket — a Unix domain socket, or a message-mode named pipe on
-//! Windows — as a **native iroh path**, instead of iroh's UDP/relay
-//! transports.
+//! macOS uses IPv4 loopback UDP, Linux uses Unix datagrams, and Windows uses
+//! local message-mode named pipes. Callers use the same [`LocalDiscovery`] and
+//! [`IpcTransport`] API on every platform. QUIC provides authentication, stream
+//! multiplexing, reliability and congestion control on each backend.
 //!
-//! Because it plugs into iroh's custom-transport API, the socket becomes
-//! just another path on the one iroh `Connection`:
-//!
-//! - **QUIC multiplexes** streams over it (many `open_bi()` substreams on
-//!   one socket — no per-stream dial);
-//! - **iroh TLS authenticates** the peer (no bespoke identity preamble);
-//! - **iroh path selection** prefers it for same-host peers (lowest RTT)
-//!   and **falls back to UDP/relay automatically** if the socket is absent.
-//!
-//! This replaces the common pattern of a hand-rolled same-host side channel
-//! (a `.data.sock` with its own framing, multiplexer, and accept loop) with
-//! one that *is* part of the iroh network.
-//!
-//! ## Why a datagram socket
-//!
-//! iroh's `CustomTransport` is a **datagram** interface (`poll_send` /
-//! `poll_recv` of packets), because QUIC runs over an unreliable datagram
-//! substrate. Each platform therefore uses a **message-boundary-preserving**
-//! local socket: Unix `SOCK_DGRAM` (`UnixDatagram`), Windows
-//! `PIPE_TYPE_MESSAGE` named pipes (each read/write is one message) — never
-//! a byte-stream pipe.
-//!
-//! ## Status
-//!
-//! **Work in progress / experimental.** Depends on iroh's
-//! `unstable-custom-transports` feature, which is itself experimental and may
-//! shift between iroh releases. See `README.md` for the design and roadmap.
-//!
-//! [iroh]: https://iroh.computer
+//! Prepare the transport asynchronously, add it to the iroh builder, and install
+//! [`PreferIpcTransport`]. Resolve co-located peers through [`LocalDiscovery`].
+//! After `iroh::Endpoint::close().await`, call [`IpcTransport::close`] to release
+//! the transport and its discovery lease. Dropping the final handle also
+//! schedules cleanup; a process crash leaves an unlocked, undiscoverable record
+//! that the next owner can reclaim without probing any socket.
 
 #![deny(missing_docs)]
 
-#[cfg(unix)]
-mod addr;
-#[cfg(unix)]
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+compile_error!("iroh-ipc-transport supports macOS, Linux, and Windows");
+
+mod backend;
+mod discovery;
 mod endpoint;
+mod locking;
 mod selector;
-#[cfg(unix)]
 mod transport;
 
-#[cfg(unix)]
-pub use addr::{ipc_custom_addr, path_from_custom_addr};
+pub use discovery::LocalDiscovery;
 pub use selector::PreferIpcTransport;
-#[cfg(unix)]
 pub use transport::IpcTransport;
 
-/// iroh custom-transport type id for this local-IPC transport, mixed into
-/// every [`iroh_base::CustomAddr`] it produces so iroh routes only its own
-/// addresses to it.
-///
-/// A random-looking constant, distinct from other custom transports sharing
-/// an endpoint.
-pub const IPC_TRANSPORT_ID: u64 = 0x69_70_63_5f_74_72_00_00; // "ipc_tr\0\0"
+/// Custom transport identifier shared by the platform backends.
+pub const IPC_TRANSPORT_ID: u64 = 0x69_70_63_5f_74_72_00_00;

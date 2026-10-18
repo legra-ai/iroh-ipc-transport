@@ -1,121 +1,140 @@
-//! The IPC [`CustomTransport`] factory.
-
-#![cfg(unix)]
+//! Prepared transport factory and owned shutdown boundary.
 
 use std::io;
-use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
+use iroh::EndpointId;
 use iroh::endpoint::transports::{CustomEndpoint, CustomTransport};
 use iroh_base::CustomAddr;
-use tokio::net::UnixDatagram;
 
-use crate::addr::ipc_custom_addr;
+use crate::LocalDiscovery;
+use crate::backend::Backend;
+use crate::discovery::Lease;
 use crate::endpoint::IpcEndpoint;
 
-/// An iroh custom transport that binds a Unix `SOCK_DGRAM` socket at a fixed
-/// path and serves it as a native iroh path for co-located peers.
+/// A prepared, single-bind local transport and its ownership lease.
 ///
-/// Add it to an endpoint with
-/// [`Builder::add_custom_transport`](iroh::endpoint::Builder::add_custom_transport),
-/// advertise [`local_addr`](Self::local_addr) to peers (as a
-/// [`TransportAddr::Custom`](iroh_base::TransportAddr::Custom)), and install
-/// [`PreferIpcTransport`](crate::PreferIpcTransport) so iroh prefers the socket
-/// for same-host peers.
+/// Preparation is async because iroh's synchronous `CustomTransport::bind`
+/// cannot perform filesystem rendezvous safely. Clones share the same resource;
+/// binding a clone a second time fails instead of creating competing receivers.
 #[derive(Debug, Clone)]
 pub struct IpcTransport {
-    socket_path: PathBuf,
-    mode: Option<u32>,
+    pub(crate) inner: Arc<Inner>,
+}
+
+#[derive(Debug)]
+pub(crate) struct Inner {
+    pub(crate) backend: Mutex<Option<Backend>>,
+    pub(crate) addr: CustomAddr,
+    lease: Mutex<Option<Lease>>,
+    close: tokio::sync::Mutex<()>,
+    bound: AtomicBool,
 }
 
 impl IpcTransport {
-    /// Create a transport that binds its datagram socket at `socket_path` when
-    /// the iroh endpoint binds.
-    ///
-    /// An existing filesystem entry is never removed or replaced. Binding to
-    /// an occupied path fails with [`io::ErrorKind::AddrInUse`], including when
-    /// the entry is a socket left by an exited process. The owner must clean
-    /// up that path explicitly after ensuring the previous endpoint is gone.
-    pub fn new(socket_path: impl Into<PathBuf>) -> Self {
-        Self {
-            socket_path: socket_path.into(),
-            mode: None,
+    /// Bind this platform's local datagram backend and publish an exclusive lease.
+    /// A concurrently live owner of `id` causes `AddrInUse`.
+    pub async fn prepare(discovery: LocalDiscovery, id: EndpointId) -> io::Result<Self> {
+        let guard = discovery.guard().await?;
+        let mut lease = Lease::acquire(discovery.clone(), id).await?;
+        let backend = match Backend::bind(&discovery, id).await {
+            Ok(backend) => backend,
+            Err(error) => {
+                drop(guard);
+                lease.release().await?;
+                return Err(error);
+            }
+        };
+        let addr = backend.local_addr();
+        if let Err(error) = lease.publish(&addr).await {
+            backend.close().await;
+            drop(guard);
+            lease.release().await?;
+            return Err(error);
         }
+        Ok(Self {
+            inner: Arc::new(Inner {
+                backend: Mutex::new(Some(backend)),
+                addr,
+                lease: Mutex::new(Some(lease)),
+                close: tokio::sync::Mutex::new(()),
+                bound: AtomicBool::new(false),
+            }),
+        })
     }
 
-    /// Set the filesystem mode applied to the socket file after binding
-    /// (e.g. `0o666`).
-    ///
-    /// A Unix datagram `sendto` requires **write** permission on the
-    /// destination socket *file*, so peers running as different users
-    /// (a user CLI talking to a service-account daemon, and the daemon
-    /// replying to the user's socket) need a mode wider than the bind
-    /// default. The transport carries QUIC — the peer is authenticated
-    /// by TLS, not by the socket mode — so widening the file mode adds
-    /// no trust beyond reachability. Unset keeps the process default.
-    #[must_use]
-    pub fn with_mode(mut self, mode: u32) -> Self {
-        self.mode = Some(mode);
-        self
-    }
-
-    /// This transport's local IPC address — advertise it to peers so they can
-    /// dial the socket.
+    /// Opaque native local address, suitable for `TransportAddr::Custom`.
     pub fn local_addr(&self) -> CustomAddr {
-        ipc_custom_addr(&self.socket_path)
+        self.inner.addr.clone()
+    }
+
+    /// Close the OS transport, then remove its discovery record and release ownership.
+    /// Call after iroh's endpoint has finished closing; concurrent calls are serialized.
+    pub async fn close(&self) -> io::Result<()> {
+        let _close = self.inner.close.lock().await;
+        let backend = self
+            .inner
+            .backend
+            .lock()
+            .expect("backend lock poisoned")
+            .take();
+        if let Some(backend) = backend {
+            backend.close().await;
+        }
+        let lease = self.inner.lease.lock().expect("lease lock poisoned").take();
+        if let Some(lease) = lease {
+            lease.release().await?;
+        }
+        Ok(())
     }
 }
-
-/// Requested `SO_RCVBUF`/`SO_SNDBUF` for the datagram socket. QUIC bursts many
-/// packets for a single co-located `put`; the default AF_UNIX receive buffer
-/// (~208 KiB) overflows mid-burst, backpressures the sender, and triggers
-/// QUIC PTO backoff (multi-second stalls). 8 MiB comfortably holds a
-/// page-sized burst. Best-effort: the kernel clamps to `net.core.rmem_max` /
-/// `wmem_max`, so on an untuned host this is capped — the batched `poll_recv`
-/// drain is the primary fix; this is defense in depth.
-const IPC_SOCKET_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
 impl CustomTransport for IpcTransport {
     fn bind(&self) -> io::Result<Box<dyn CustomEndpoint>> {
-        // The kernel grants pathname ownership through bind. Removing an
-        // existing entry here steals a live endpoint's address and redirects
-        // its peers to a different socket. A collision must fail untouched;
-        // probing first would introduce a check/unlink/rebind race.
-        let socket = UnixDatagram::bind(&self.socket_path)?;
-        if let Some(mode) = self.mode {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&self.socket_path, std::fs::Permissions::from_mode(mode))?;
+        if self.inner.bound.swap(true, Ordering::AcqRel) {
+            return Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                "IPC transport already bound",
+            ));
         }
-        // Best-effort buffer enlargement; a failure just leaves the OS default,
-        // so never fail `bind` over it.
-        let sock = socket2::SockRef::from(&socket);
-        let _ = sock.set_recv_buffer_size(IPC_SOCKET_BUFFER_BYTES);
-        let _ = sock.set_send_buffer_size(IPC_SOCKET_BUFFER_BYTES);
-        Ok(Box::new(IpcEndpoint::new(socket, self.socket_path.clone())))
+        if self
+            .inner
+            .backend
+            .lock()
+            .expect("backend lock poisoned")
+            .is_none()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "IPC transport closed",
+            ));
+        }
+        Ok(Box::new(IpcEndpoint::new(self.inner.clone())))
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::os::unix::fs::PermissionsExt;
-
-    use iroh::endpoint::transports::CustomTransport;
-
-    use super::IpcTransport;
-
-    /// `with_mode(0o666)` must land on the bound socket file: a Unix
-    /// datagram `sendto` needs write permission on the destination
-    /// socket file, so cross-user peers (user CLI ↔ service-account
-    /// daemon) break silently on the bind default.
-    #[tokio::test]
-    async fn with_mode_applies_to_bound_socket() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("mode.ipc.sock");
-        let transport = IpcTransport::new(&path).with_mode(0o666);
-        let _endpoint = transport.bind().expect("bind");
-        let mode = std::fs::metadata(&path)
-            .expect("metadata")
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o666, "socket file mode must be 0o666");
+impl Drop for Inner {
+    fn drop(&mut self) {
+        let backend = self
+            .backend
+            .get_mut()
+            .expect("backend lock poisoned")
+            .take();
+        let lease = self.lease.get_mut().expect("lease lock poisoned").take();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                if let Some(backend) = backend {
+                    backend.close().await;
+                }
+                if let Some(lease) = lease
+                    && let Err(error) = lease.release().await
+                {
+                    tracing::error!(%error, "IPC lease cleanup failed");
+                }
+            });
+        }
+        // Without a runtime, dropping OS handles releases the lease. The stale
+        // record is ignored by lookup and reclaimed by the next prepare call.
     }
 }

@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn missing_stats_rank_last_within_tier_but_keep_tier() {
         let ipc_no_stats = RankKey::rank(
-            &crate::ipc_custom_addr(std::path::Path::new("/tmp/x.sock")).into(),
+            &iroh_base::CustomAddr::from_parts(crate::IPC_TRANSPORT_ID, &[1, 1, 1]).into(),
             None,
         );
         assert_eq!(ipc_no_stats.tier, Tier::Ipc);

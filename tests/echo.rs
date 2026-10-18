@@ -2,13 +2,13 @@
 //! — no IP, no relay — so a successful round-trip means the bytes rode the
 //! Unix socket as a native iroh path.
 
-#![cfg(unix)]
+mod common;
 
 use std::sync::Arc;
 
 use iroh::endpoint::{Endpoint, presets};
 use iroh::{EndpointAddr, SecretKey, TransportAddr};
-use iroh_ipc_transport::{IpcTransport, PreferIpcTransport};
+use iroh_ipc_transport::{IpcTransport, LocalDiscovery, PreferIpcTransport};
 
 const ECHO_ALPN: &[u8] = b"iroh-ipc-transport/echo";
 
@@ -19,7 +19,12 @@ async fn ipc_only_endpoint(
     socket_path: &std::path::Path,
     alpns: Vec<Vec<u8>>,
 ) -> (Endpoint, IpcTransport) {
-    let transport = IpcTransport::new(socket_path);
+    let transport = IpcTransport::prepare(
+        LocalDiscovery::new(socket_path.parent().expect("namespace")),
+        secret.public(),
+    )
+    .await
+    .expect("prepare IPC");
     let endpoint = Endpoint::builder(presets::N0)
         .secret_key(secret)
         .alpns(alpns)
@@ -35,7 +40,7 @@ async fn ipc_only_endpoint(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn echo_round_trips_over_the_ipc_transport_only() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = common::TestDir::new().await;
     let path_a = dir.path().join("a.ipc.sock");
     let path_b = dir.path().join("b.ipc.sock");
 
@@ -45,6 +50,7 @@ async fn echo_round_trips_over_the_ipc_transport_only() {
     let (ep_a, _ta) = ipc_only_endpoint(SecretKey::from([1u8; 32]), &path_a, vec![]).await;
     let (ep_b, tb) = ipc_only_endpoint(secret_b, &path_b, vec![ECHO_ALPN.to_vec()]).await;
 
+    let server_endpoint = ep_b.clone();
     // Server: accept one connection, echo one bidi stream.
     let server = tokio::spawn(async move {
         let incoming = ep_b.accept().await.expect("incoming");
@@ -54,6 +60,7 @@ async fn echo_round_trips_over_the_ipc_transport_only() {
         send.write_all(&msg).await.expect("echo write");
         send.finish().expect("finish");
         conn.closed().await;
+        server_endpoint.close().await;
     });
 
     // Client A dials B by B's IPC custom address only (no discovery involved).
@@ -71,4 +78,8 @@ async fn echo_round_trips_over_the_ipc_transport_only() {
 
     conn.close(0u32.into(), b"done");
     server.await.expect("server task");
+    ep_a.close().await;
+    _ta.close().await.expect("close client transport");
+    tb.close().await.expect("close server transport");
+    dir.close().await;
 }

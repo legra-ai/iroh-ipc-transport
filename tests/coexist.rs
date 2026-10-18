@@ -6,7 +6,7 @@
 //! competing path; this test times what actually happens when iroh must
 //! *choose*.
 
-#![cfg(unix)]
+mod common;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use iroh::endpoint::{Endpoint, presets};
 use iroh::{EndpointAddr, SecretKey, TransportAddr};
-use iroh_ipc_transport::{IpcTransport, PreferIpcTransport};
+use iroh_ipc_transport::{IpcTransport, LocalDiscovery, PreferIpcTransport};
 
 const ALPN: &[u8] = b"iroh-ipc-transport/coexist";
 const PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
@@ -26,7 +26,12 @@ async fn coexist_endpoint(
     socket_path: &std::path::Path,
     alpns: Vec<Vec<u8>>,
 ) -> (Endpoint, IpcTransport) {
-    let transport = IpcTransport::new(socket_path);
+    let transport = IpcTransport::prepare(
+        LocalDiscovery::new(socket_path.parent().expect("namespace")),
+        secret.public(),
+    )
+    .await
+    .expect("prepare IPC");
     let endpoint = Endpoint::builder(presets::N0)
         .secret_key(secret)
         .alpns(alpns)
@@ -51,7 +56,7 @@ fn loopback_udp_addr(ep: &Endpoint) -> SocketAddr {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn first_rtt_and_large_transfer_with_coexisting_paths() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = common::TestDir::new().await;
     let path_a = dir.path().join("a.ipc.sock");
     let path_b = dir.path().join("b.ipc.sock");
 
@@ -63,6 +68,7 @@ async fn first_rtt_and_large_transfer_with_coexisting_paths() {
 
     let b_udp = loopback_udp_addr(&ep_b);
 
+    let server_endpoint = ep_b.clone();
     // Server: echo one small stream, then drain one large stream and ack.
     let server = tokio::spawn(async move {
         let incoming = ep_b.accept().await.expect("incoming");
@@ -84,6 +90,7 @@ async fn first_rtt_and_large_transfer_with_coexisting_paths() {
         send.finish().expect("finish large");
 
         conn.closed().await;
+        server_endpoint.close().await;
         received.len()
     });
 
@@ -127,4 +134,8 @@ async fn first_rtt_and_large_transfer_with_coexisting_paths() {
     eprintln!("connect:        {t_connect:?}");
     eprintln!("first rtt:      {t_first_rtt:?}");
     eprintln!("8 MiB transfer: {t_large:?}");
+    ep_a.close().await;
+    _ta.close().await.expect("close client transport");
+    tb.close().await.expect("close server transport");
+    dir.close().await;
 }
