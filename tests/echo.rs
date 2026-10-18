@@ -7,7 +7,7 @@ mod common;
 use std::sync::Arc;
 
 use iroh::endpoint::{Endpoint, presets};
-use iroh::{EndpointAddr, SecretKey, TransportAddr};
+use iroh::{EndpointAddr, SecretKey};
 use iroh_ipc_transport::{IpcTransport, LocalDiscovery, PreferIpcTransport};
 
 const ECHO_ALPN: &[u8] = b"iroh-ipc-transport/echo";
@@ -27,6 +27,9 @@ async fn ipc_only_endpoint(
     .expect("prepare IPC");
     let endpoint = Endpoint::builder(presets::N0)
         .secret_key(secret)
+        .address_lookup(LocalDiscovery::new(
+            socket_path.parent().expect("namespace"),
+        ))
         .alpns(alpns)
         .add_custom_transport(Arc::new(transport.clone()))
         .path_selector(Arc::new(PreferIpcTransport))
@@ -63,8 +66,8 @@ async fn echo_round_trips_over_the_ipc_transport_only() {
         server_endpoint.close().await;
     });
 
-    // Client A dials B by B's IPC custom address only (no discovery involved).
-    let b_addr = EndpointAddr::from_parts(b_id, [TransportAddr::Custom(tb.local_addr())]);
+    // Resolve B through the crate-owned local discovery; IP and relay are disabled.
+    let b_addr = EndpointAddr::from(b_id);
     let conn = ep_a
         .connect(b_addr, ECHO_ALPN)
         .await

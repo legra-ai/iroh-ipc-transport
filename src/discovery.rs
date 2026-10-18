@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use iroh::{EndpointId, TransportAddr};
 use iroh_base::CustomAddr;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 
 use crate::IPC_TRANSPORT_ID;
 use crate::locking::Lock;
@@ -36,7 +36,7 @@ impl LocalDiscovery {
         }
         let _guard = self.guard().await?;
         let path = self.record_path(id);
-        match Lock::open(&path, false).await {
+        match Lock::open(&self.lease_path(id), false).await {
             Ok(_) => return Ok(None), // The previous process released its lease.
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
@@ -58,6 +58,10 @@ impl LocalDiscovery {
 
     pub(crate) fn record_path(&self, id: EndpointId) -> PathBuf {
         self.root.join(format!("{id}.ipc"))
+    }
+
+    fn lease_path(&self, id: EndpointId) -> PathBuf {
+        self.root.join(format!("{id}.lease"))
     }
 
     #[cfg(target_os = "linux")]
@@ -97,7 +101,7 @@ pub(crate) struct Lease {
 impl Lease {
     // Caller holds the directory guard until publication or failure cleanup.
     pub(crate) async fn acquire(discovery: LocalDiscovery, id: EndpointId) -> io::Result<Self> {
-        let lock = Lock::open(&discovery.record_path(id), true)
+        let lock = Lock::open(&discovery.lease_path(id), true)
             .await
             .map_err(|error| {
                 if error.kind() == io::ErrorKind::WouldBlock {
@@ -110,14 +114,20 @@ impl Lease {
         {
             // Only a valid record written by this transport grants ownership
             // of a stale socket pathname. Never delete an unrelated entry.
-            let mut file = tokio::fs::File::open(discovery.record_path(id)).await?;
-            let mut bytes = [0u8; 513];
-            let count = file.read(&mut bytes).await?;
-            let old = CustomAddr::from_parts(IPC_TRANSPORT_ID, &bytes[..count]);
-            if crate::backend::Backend::path(&old).as_deref()
-                == Some(discovery.socket_path(id).as_path())
-            {
-                remove_if_present(&discovery.socket_path(id)).await?;
+            match tokio::fs::File::open(discovery.record_path(id)).await {
+                Ok(file) => {
+                    // bounded: only a complete transport address can authorize cleanup.
+                    let mut bytes = Vec::with_capacity(513);
+                    file.take(513).read_to_end(&mut bytes).await?;
+                    let old = CustomAddr::from_parts(IPC_TRANSPORT_ID, &bytes);
+                    if crate::backend::Backend::path(&old).as_deref()
+                        == Some(discovery.socket_path(id).as_path())
+                    {
+                        remove_if_present(&discovery.socket_path(id)).await?;
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
             }
         }
         Ok(Self {
@@ -134,9 +144,16 @@ impl Lease {
         {
             self.socket = crate::backend::Backend::path(addr);
         }
-        self.lock.file.set_len(0).await?;
-        self.lock.file.write_all(addr.data()).await?;
-        self.lock.file.flush().await
+        // Windows file locks exclude reads from other handles. Keep the locked
+        // lease empty and store the readable address in a separate regular file.
+        let path = self.discovery.record_path(self.id);
+        tokio::fs::write(&path, addr.data()).await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666)).await?;
+        }
+        Ok(())
     }
 
     pub(crate) async fn release(self) -> io::Result<()> {
@@ -149,7 +166,8 @@ impl Lease {
         // deletion. The directory guard excludes all new binders/resolvers.
         let record = self.discovery.record_path(self.id);
         drop(self.lock);
-        remove_if_present(&record).await
+        remove_if_present(&record).await?;
+        remove_if_present(&self.discovery.lease_path(self.id)).await
     }
 }
 

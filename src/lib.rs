@@ -21,6 +21,7 @@ mod backend;
 mod discovery;
 mod endpoint;
 mod locking;
+mod lookup;
 mod selector;
 mod transport;
 

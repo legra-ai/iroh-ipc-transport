@@ -10,7 +10,7 @@ use tokio::fs::{File, OpenOptions};
 
 #[derive(Debug)]
 pub(crate) struct Lock {
-    pub(crate) file: File,
+    _file: File,
 }
 
 impl Lock {
@@ -42,13 +42,19 @@ impl Lock {
         };
         let file = file.into_std().await;
         let file = tokio::task::spawn_blocking(move || {
-            fs2::FileExt::try_lock_exclusive(&file)?;
+            fs2::FileExt::try_lock_exclusive(&file).map_err(|error| {
+                if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
+                    io::Error::new(io::ErrorKind::WouldBlock, error)
+                } else {
+                    error
+                }
+            })?;
             Ok::<_, io::Error>(file)
         })
         .await
         .map_err(io::Error::other)??;
         Ok(Self {
-            file: File::from_std(file),
+            _file: File::from_std(file),
         })
     }
 }
