@@ -76,6 +76,33 @@ impl Backend {
         }
     }
 
+    fn filter_received(
+        &self,
+        bufs: &mut [io::IoSliceMut<'_>],
+        metas: &mut [noq_udp::RecvMeta],
+        infos: &mut [RecvInfo],
+        count: usize,
+    ) -> usize {
+        let mut valid = 0;
+        for index in 0..count {
+            if metas[index].addr.ip() != Ipv4Addr::LOCALHOST
+                || metas[index].addr.port() == 0
+                || metas[index].len == 0
+            {
+                continue;
+            }
+            if valid != index {
+                let (earlier, later) = bufs.split_at_mut(index);
+                earlier[valid][..metas[index].len].copy_from_slice(&later[0][..metas[index].len]);
+                metas[valid] = metas[index];
+            }
+            infos[valid] =
+                RecvInfo::new(address(metas[valid].addr.port()), Some(self.addr.clone()));
+            valid += 1;
+        }
+        valid
+    }
+
     pub(crate) fn poll_recv(
         &mut self,
         cx: &mut Context<'_>,
@@ -94,17 +121,12 @@ impl Backend {
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => continue,
                 Err(error) => return Poll::Ready(Err(error)),
                 Ok(count) => {
-                    // Bound socket is loopback-only. Reject spoofed external source
-                    // addresses rather than converting them into local destinations.
-                    for index in 0..count {
-                        if metas[index].addr.ip() != Ipv4Addr::LOCALHOST {
-                            metas[index].len = 0;
-                            metas[index].stride = 0;
-                        }
-                        infos[index] = RecvInfo::new(
-                            address(metas[index].addr.port()),
-                            Some(self.addr.clone()),
-                        );
+                    let count = self.filter_received(bufs, metas, infos, count);
+                    if count == 0 {
+                        // We consumed a batch, so register a new poll rather than
+                        // passing a zero-stride packet to QUIC or spinning here.
+                        cx.waker().wake_by_ref();
+                        return Poll::Pending;
                     }
                     return Poll::Ready(Ok(count));
                 }
@@ -127,4 +149,39 @@ fn port(addr: &CustomAddr) -> Option<u16> {
     };
     let port = u16::from_be_bytes([hi, lo]);
     (port != 0).then_some(port)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn rejected_source_is_omitted_without_zero_stride_or_losing_valid_packet() {
+        let backend = Backend::bind(
+            &LocalDiscovery::new("unused"),
+            iroh::SecretKey::generate().public(),
+        )
+        .await
+        .unwrap();
+        let mut invalid = [9; 4];
+        let mut valid = [7; 4];
+        let mut bufs = [
+            io::IoSliceMut::new(&mut invalid),
+            io::IoSliceMut::new(&mut valid),
+        ];
+        let mut metas = [noq_udp::RecvMeta::default(); 2];
+        for (meta, source) in metas.iter_mut().zip(["192.0.2.1:12", "127.0.0.1:34"]) {
+            meta.addr = source.parse().unwrap();
+            meta.len = 4;
+            meta.stride = 4;
+        }
+        let mut infos = [
+            RecvInfo::new(address(12), None),
+            RecvInfo::new(address(34), None),
+        ];
+        let count = backend.filter_received(&mut bufs, &mut metas, &mut infos, 2);
+        assert_eq!(count, 1);
+        assert_eq!(metas[0].stride, 4);
+        assert_eq!(&bufs[0][..4], &[7; 4]);
+    }
 }

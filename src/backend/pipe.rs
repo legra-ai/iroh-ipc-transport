@@ -196,11 +196,9 @@ impl Backend {
                 )));
             }
             bufs[count][..len].copy_from_slice(&packet.contents);
-            metas[count] = noq_udp::RecvMeta {
-                len,
-                stride: len,
-                ..Default::default()
-            };
+            metas[count] = noq_udp::RecvMeta::default();
+            metas[count].len = len;
+            metas[count].stride = len;
             infos[count] = RecvInfo::new(address(packet.source), Some(self.local_addr()));
             count += 1;
         }

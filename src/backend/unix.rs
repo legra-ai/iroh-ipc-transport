@@ -125,11 +125,9 @@ impl Backend {
                     let Some(path) = source.as_pathname() else {
                         continue;
                     };
-                    metas[count] = noq_udp::RecvMeta {
-                        len: read.filled().len(),
-                        stride: read.filled().len(),
-                        ..Default::default()
-                    };
+                    metas[count] = noq_udp::RecvMeta::default();
+                    metas[count].len = read.filled().len();
+                    metas[count].stride = read.filled().len();
                     infos[count] = RecvInfo::new(address(path), Some(self.addr.clone()));
                     count += 1;
                 }
