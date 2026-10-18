@@ -5,6 +5,28 @@ mod common;
 use iroh::endpoint::transports::CustomTransport;
 use iroh::{SecretKey, TransportAddr};
 use iroh_ipc_transport::{IPC_TRANSPORT_ID, IpcTransport, LocalDiscovery};
+
+#[tokio::test]
+async fn live_local_target_excludes_competing_addresses_before_connect() {
+    let dir = common::TestDir::new().await;
+    let discovery = LocalDiscovery::new(dir.path());
+    let id = SecretKey::generate().public();
+    let owner = IpcTransport::prepare(discovery.clone(), id).await.unwrap();
+    let remote =
+        iroh::EndpointAddr::from_parts(id, [TransportAddr::Ip("127.0.0.1:12345".parse().unwrap())]);
+    let local = discovery.resolve_target(remote.clone()).await.unwrap();
+    assert_eq!(local.id, id);
+    assert_eq!(
+        local.addrs,
+        [TransportAddr::Custom(owner.local_addr())].into()
+    );
+    owner.close().await.unwrap();
+    assert_eq!(
+        discovery.resolve_target(remote.clone()).await.unwrap(),
+        remote
+    );
+    dir.close().await;
+}
 use std::io;
 
 #[tokio::test]

@@ -20,6 +20,13 @@ and cleanup. This avoids that kernel subsystem's disconnect path. UDP remains
 an explicit custom transport, so `PreferIpcTransport` can prefer it over ordinary
 IP and relay paths. The backend does not change after an error.
 
+Use `resolve_target` before every dial: a live local lease produces a target
+containing only the local custom address. iroh 1.3 can leave a custom path
+unopened when an IP path wins its initial handshake race; a selector cannot
+select an unopened path. Choosing a local-only target prevents that race.
+Without a local lease, the original remote target is preserved. There is no
+remote retry after a local transport failure.
+
 ## Usage
 
 ```rust,no_run
@@ -39,13 +46,10 @@ let endpoint = Endpoint::builder(presets::Minimal)
     .bind()
     .await?;
 
-// For targets already carrying IP/relay addresses, add the local candidate
-// explicitly: iroh need not consult address lookup for an addressed target.
+// Resolve before every dial, including targets already carrying IP/relay addresses.
+// A live local lease selects the local backend deterministically.
 # let peer_id = SecretKey::generate().public();
-let mut target = EndpointAddr::new(peer_id);
-if let Some(local) = discovery.resolve(peer_id).await? {
-    target = target.with_addrs([local]);
-}
+let target = discovery.resolve_target(EndpointAddr::new(peer_id)).await?;
 
 endpoint.close().await;
 transport.close().await?;

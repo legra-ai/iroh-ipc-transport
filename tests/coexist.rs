@@ -4,7 +4,8 @@
 //! pair looks like. The IPC-only echo/burst tests can never see the
 //! seconds-scale first-`put` stall observed live, because they remove the
 //! competing path; this test times what actually happens when iroh must
-//! *choose*.
+//! *choose*. A live local lease selects a local-only dial target before
+//! connecting, while both endpoints retain their IP transports for remote peers.
 
 mod common;
 
@@ -103,6 +104,11 @@ async fn first_rtt_and_large_transfer_with_coexisting_paths() {
         ],
     );
 
+    let b_addr = LocalDiscovery::new(dir.path())
+        .resolve_target(b_addr)
+        .await
+        .expect("local route");
+
     let t0 = Instant::now();
     let conn = ep_a.connect(b_addr, ALPN).await.expect("connect");
     let t_connect = t0.elapsed();
@@ -125,6 +131,12 @@ async fn first_rtt_and_large_transfer_with_coexisting_paths() {
     recv.read_exact(&mut ack).await.expect("read ack");
     let t_large = t2.elapsed();
     assert_eq!(u64::from_le_bytes(ack) as usize, PAYLOAD_BYTES);
+    assert!(
+        conn.paths().iter().any(|path| path.is_selected()
+            && matches!(path.remote_addr(), TransportAddr::Custom(addr)
+            if addr.id() == iroh_ipc_transport::IPC_TRANSPORT_ID)),
+        "the local custom path must carry the transfer"
+    );
 
     conn.close(0u32.into(), b"done");
     let received = server.await.expect("server task");

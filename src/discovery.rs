@@ -6,7 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use iroh::{EndpointId, TransportAddr};
+use iroh::{EndpointAddr, EndpointId, TransportAddr};
 use iroh_base::CustomAddr;
 use tokio::io::AsyncReadExt;
 
@@ -28,6 +28,21 @@ impl LocalDiscovery {
     /// Choose a rendezvous directory. Creation happens asynchronously on bind.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
+    }
+
+    /// Select a local-only dial target for a live co-located peer.
+    /// Targets without a local lease retain their supplied addresses.
+    ///
+    /// Call before connecting even when a target already contains IP or relay
+    /// addresses. iroh 1.3 races initial packets and may leave a losing custom
+    /// path unopened. A path selector can only prefer paths that were opened.
+    /// A local lease proves co-location, so remote candidates are unnecessary
+    /// for this dial. Transport errors are returned without a remote retry.
+    pub async fn resolve_target(&self, target: EndpointAddr) -> io::Result<EndpointAddr> {
+        match self.resolve(target.id).await? {
+            Some(local) => Ok(EndpointAddr::from_parts(target.id, [local])),
+            None => Ok(target),
+        }
     }
 
     /// Resolve an actively leased local endpoint, or `None` if absent/stale.
