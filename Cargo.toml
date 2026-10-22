@@ -1,6 +1,6 @@
 [package]
 name = "iroh-ipc-transport"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 authors = ["Jacobus Geluk <jacobus.geluk@dataroad.com>"]
 rust-version = "1.91"
