@@ -1261,7 +1261,7 @@ dependencies = [
 
 [[package]]
 name = "iroh-ipc-transport"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "fs2",
  "iroh",
