@@ -11,6 +11,7 @@ use iroh_base::CustomAddr;
 use tokio::io::AsyncReadExt;
 
 use crate::IPC_TRANSPORT_ID;
+use crate::directory_access::DirectoryAccess;
 use crate::locking::Lock;
 
 /// Local rendezvous directory shared by cooperating processes.
@@ -22,12 +23,34 @@ use crate::locking::Lock;
 #[derive(Debug, Clone)]
 pub struct LocalDiscovery {
     root: PathBuf,
+    access: DirectoryAccess,
 }
 
 impl LocalDiscovery {
-    /// Choose a rendezvous directory. Creation happens asynchronously on bind.
+    /// Choose a rendezvous directory private to the current user. If missing,
+    /// it is created on first use with mode `0700`, independent of the umask.
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self::with_access(root, DirectoryAccess::Owner)
+    }
+
+    /// Choose a rendezvous directory shared by every local user. If missing,
+    /// it is created on first use with mode `01777` (world-writable, sticky),
+    /// independent of the umask, so peers running as different users can
+    /// rendezvous. An existing directory keeps whatever mode it has.
+    pub fn shared(root: impl Into<PathBuf>) -> Self {
+        Self::with_access(root, DirectoryAccess::Shared)
+    }
+
+    fn with_access(root: impl Into<PathBuf>, access: DirectoryAccess) -> Self {
+        Self {
+            root: root.into(),
+            access,
+        }
+    }
+
+    /// The rendezvous directory.
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     /// Select a local-only dial target for a live co-located peer.
@@ -87,7 +110,7 @@ impl LocalDiscovery {
     }
 
     pub(crate) async fn guard(&self) -> io::Result<Lock> {
-        tokio::fs::create_dir_all(&self.root).await?;
+        self.access.ensure(&self.root).await?;
         let path = self.root.join(".ipc.lock");
         // This single persistent lock serializes pathname creation/removal, so
         // nobody can acquire a lease on an unlinked inode. It is never removed.
