@@ -57,6 +57,11 @@ transport.close().await?;
 # }
 ```
 
+`LocalDiscovery::new` creates a missing rendezvous directory owner-only
+(`0700`); `LocalDiscovery::shared` creates it world-writable and sticky
+(`01777`) so peers running as different users can rendezvous. Both set the mode
+explicitly, independent of the umask, and never change an existing directory.
+
 Applications choose a shared local rendezvous directory and endpoint identity;
 they do not construct socket paths, UDP ports or pipe names. Use a directory
 writable by the intended cooperating accounts. Unix socket and record modes
