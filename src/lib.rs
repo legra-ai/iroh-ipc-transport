@@ -18,6 +18,7 @@
 compile_error!("iroh-ipc-transport supports macOS, Linux, and Windows");
 
 mod backend;
+mod directory_access;
 mod discovery;
 mod endpoint;
 mod locking;
