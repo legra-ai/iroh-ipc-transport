@@ -13,6 +13,7 @@ jobs:
   ci:
     uses: legra-ai/github-actions/.github/workflows/cargo-maintenance.yml@8cdaad621c581c2f59e5eb0dfafc05f635c12c0a
     with:
+      breaking-change-bump: minor
       crate-name: iroh-ipc-transport
       kind: library
     secrets: inherit
