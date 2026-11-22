@@ -11,7 +11,7 @@ permissions:
   actions: read
 jobs:
   ci:
-    uses: legra-ai/github-actions/.github/workflows/cargo-maintenance.yml@8cdaad621c581c2f59e5eb0dfafc05f635c12c0a
+    uses: legra-ai/github-actions/.github/workflows/cargo-maintenance.yml@65a22bfa9534499fa5a9dcb44c519b5ad8c6cf9d
     with:
       breaking-change-bump: minor
       crate-name: iroh-ipc-transport
