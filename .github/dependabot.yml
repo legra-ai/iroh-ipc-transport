@@ -58,3 +58,4 @@ updates:
       - "automated"
     commit-message:
       prefix: "ci"
+      include: "scope"
