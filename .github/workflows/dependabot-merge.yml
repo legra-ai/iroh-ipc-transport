@@ -12,14 +12,14 @@ jobs:
     timeout-minutes: 5
     steps:
       # Trusted completed-CI handler; never checks out pull-request code.
-      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         id: merger
         with:
           app-id: ${{ secrets.RELEASE_MERGER_APP_ID }}
           private-key: ${{ secrets.RELEASE_MERGER_APP_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-      - uses: legra-ai/github-actions/.github/actions/merge-tested-dependabot@7161b3b0fb80eb36ff9d92faccfced2a8001fe40
+      - uses: legra-ai/github-actions/.github/actions/merge-tested-dependabot@65a22bfa9534499fa5a9dcb44c519b5ad8c6cf9d
         with:
           token: ${{ steps.merger.outputs.token }}
           app-id: ${{ secrets.RELEASE_MERGER_APP_ID }}
