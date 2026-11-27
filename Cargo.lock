@@ -71,6 +71,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
+name = "async-fs-io"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf55be8f4180e717c8cbbe3a073587d2b98456d9b1ee12bb2ca21641e21bdde8"
+dependencies = [
+ "fs2",
+ "thiserror 2.0.21",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "async_io_stream"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2203,9 +2215,13 @@ dependencies = [
 
 [[package]]
 name = "rhusky"
-version = "0.0.6"
+version = "2.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd58f5095f1eaaee85441008005db48773976f5bb85bedd35d6cf3f04db8ec4b"
+checksum = "fde3d1b47010e0fe5743f2f6b79094352327eef03c3ff32c550e6a41a58cff91"
+dependencies = [
+ "async-fs-io",
+ "tokio",
+]
 
 [[package]]
 name = "ring"
@@ -3067,6 +3083,17 @@ name = "utf_types"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a3b425286980a367278453f3b6d28cdcb134b574e5a35824a6ff5eebad50bb6"
+
+[[package]]
+name = "uuid"
+version = "1.29.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c14b15dffa2f4bd712103e857140aa04a4f2ff6e955c77d7eb8e53ee02a3b64"
+dependencies = [
+ "getrandom 0.4.3",
+ "js-sys",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "valuable"
